@@ -8,27 +8,321 @@ format: typst
 ## **Part 0: libraries**
 
 ```{r}
-
+library(tidyverse)
+library(stringr)
+library(dplyr)
 ```
 
 ## **Part 1:** **Defining Research Question**
 
-Chosen Question:
+# Chosen Question: How does the proportion of renewable energy vary geographically across the United States? Does a relationship exist between renewable energy share and electricity pricing by state?
 
 ## **Part 2: Data Preparation and Cleaning**
-
 ```{r}
+# Check current working directory
+getwd()
 
+# View available files
+list.files()
+
+# Set working directory to data folder
+setwd("C:/Users/garva/Documents/Code Projects/ev-power-garv-agarwal/data")
+
+# Import renewable energy usage data (2021-2023)
+renewable_21 <- read.csv("renew-use-2021.csv")
+renewable_22 <- read.csv("renew-use-2022.csv")
+renewable_23 <- read.csv("renew-use-2023.csv")
+
+# Import total energy consumption data (2021-2023)
+total_21 <- read.csv("total-use-2021.csv")
+total_22 <- read.csv("total-use-2022.csv")
+total_23 <- read.csv("total-use-2023.csv")
+
+# Import pricing and registration data
+energy_prices <- read.csv("av-energy-price-2021-2023.csv", header = FALSE)
+ev_data <- read.csv("ev-registrations-by-state-2023.csv")
+
+## Examine dataset structures
+str(renewable_21)
+str(renewable_22)
+str(renewable_23)
+head(renewable_21)
+head(renewable_22)
+head(renewable_23)
+
+str(total_21)
+str(total_22)
+str(total_23)
+head(total_21)  # Will need to reshape these dataframes
+head(total_22)  # Will need to reshape these dataframes
+head(total_23)  # Will need to reshape these dataframes
+
+str(ev_data)
+head(ev_data)
+str(energy_prices)
+head(energy_prices)
+
+## Data cleaning process
+
+## Clean renewable energy datasets
+# Extract numeric values from 2021 renewable usage column
+renewable_21_clean <- renewable_21 %>% 
+  mutate(renew_21 = str_extract(Renewable_Use_2021, "\\d+"))
+
+# Apply same extraction for 2022 and 2023
+renewable_22_clean <- renewable_22 %>% 
+  mutate(renew_22 = str_extract(Renewable_Use_2022, "\\d+"))
+
+renewable_23_clean <- renewable_23 %>% 
+  mutate(renew_23 = str_extract(Renewable_Use_2023, "\\d+"),
+         State = str_to_upper(State))
+
+renewable_23_clean
+
+# Clean EV registration dataset
+
+# Update column names and remove header rows
+colnames(ev_data)
+head(ev_data)
+ev_data_clean <- ev_data %>% 
+  rename(state_name = electric.vehicle.registrations_by_state..2023., 
+         registration_count = X) %>% 
+  slice(-c(1, 2))
+
+# Extract numeric registration values
+ev_registrations <- ev_data_clean %>% 
+  mutate(registrations = str_extract(registration_count, "\\d+"))
+
+## Clean energy pricing dataset
+colnames(energy_prices)
+
+# Remove header rows
+prices_clean <- energy_prices %>% slice(-c(1:2))
+
+# Split combined column into separate year columns
+colnames(prices_clean)
+prices_separated <- prices_clean %>% 
+  separate(V1, into = c("State", "year_2021", "year_2022", "year_2023"), 
+           sep = ",") %>% 
+  slice(-c(1))
+
+# Extract decimal price values for each year
+prices_final <- prices_separated %>% 
+  mutate(price_21 = str_extract(year_2021, "\\d+\\.\\d+"),
+         price_22 = str_extract(year_2022, "\\d+\\.\\d+"),
+         price_23 = str_extract(year_2023, "\\d+\\.\\d+")) %>% 
+  select(-c(2, 3, 4))
+
+prices_final
 ```
 
 ## **Part 3: Joining / Pivoting Datasets for Analysis**
-
 ```{r}
+## Merge renewable energy datasets across years
+head(renewable_21_clean)
 
+# Combine 2021 and 2022 using left join
+merged_21_22 <- left_join(renewable_21_clean, renewable_22_clean, 
+                          by = join_by(State == State, 
+                                      Energy_Source == Energy_Source)) %>% 
+  select(-c("Renewable_Use_2021", "Renewable_Use_2022"))
+
+# Add 2023 data to the merged dataset
+merged_all_years <- left_join(merged_21_22, renewable_23_clean, 
+                              by = join_by(State == State, 
+                                          Energy_Source == Energy_Source)) %>% 
+  select(-c("Renewable_Use_2023"))
+
+merged_all_years
+
+## Aggregate renewable energy totals by state for each year
+state_renewable_totals <- merged_all_years %>%
+  mutate(across(starts_with("renew_"), as.numeric)) %>%
+  group_by(State) %>%
+  summarize(
+    year_2021_total = sum(renew_21, na.rm = TRUE),
+    year_2022_total = sum(renew_22, na.rm = TRUE),
+    year_2023_total = sum(renew_23, na.rm = TRUE)
+  )
+
+state_renewable_totals
+
+## Reshape total energy usage dataframes to long format
+total_21_long <- total_21 %>% 
+  pivot_longer(cols = -Energy_Source, 
+               names_to = "State", 
+               values_to = "total_usage_2021") %>% 
+  group_by(State) %>% 
+  arrange(State)
+
+## Apply same transformation for 2022 and 2023
+total_22_long <- total_22 %>% 
+  pivot_longer(cols = -Energy_Source, 
+               names_to = "State", 
+               values_to = "total_usage_2022") %>% 
+  group_by(State) %>% 
+  arrange(State)
+
+total_23_long <- total_23 %>% 
+  pivot_longer(cols = -Energy_Source, 
+               names_to = "State", 
+               values_to = "total_usage_2023") %>% 
+  group_by(State) %>% 
+  arrange(State)
 ```
 
 ## **Part 4: Mapping Visualization**
-
 ```{r}
+library(maps)
+library(ggplot2)
+# Calculate total energy usage by state for each year
+total_energy_by_state <- total_21_long %>%
+  group_by(State) %>%
+  summarize(total_2021 = sum(total_usage_2021, na.rm = TRUE))
+
+total_energy_22 <- total_22_long %>%
+  group_by(State) %>%
+  summarize(total_2022 = sum(total_usage_2022, na.rm = TRUE))
+
+total_energy_23 <- total_23_long %>%
+  group_by(State) %>%
+  summarize(total_2023 = sum(total_usage_2023, na.rm = TRUE))
+
+# Join all total energy data
+total_energy_all <- total_energy_by_state %>%
+  left_join(total_energy_22, by = "State") %>%
+  left_join(total_energy_23, by = "State")
+
+# Join renewable totals with total energy usage
+energy_combined <- state_renewable_totals %>%
+  left_join(total_energy_all, by = "State")
+
+# Calculate renewable energy percentage for each year
+energy_combined <- energy_combined %>%
+  mutate(
+    renewable_pct_2021 = (year_2021_total / total_2021) * 100,
+    renewable_pct_2022 = (year_2022_total / total_2022) * 100,
+    renewable_pct_2023 = (year_2023_total / total_2023) * 100,
+    # Convert state names to lowercase for map joining
+    state_lower = str_to_lower(State)
+  )
+
+# Join with energy prices
+energy_combined <- energy_combined %>%
+  left_join(prices_final, by = "State") %>%
+  mutate(across(starts_with("price_"), as.numeric))
+
+# View the combined dataset
+head(energy_combined)
+
+## Create the map
+
+# Get US state map data
+us_states <- map_data("state")
+
+# Join map data with our energy data
+map_data_renewable <- us_states %>%
+  left_join(energy_combined, by = c("region" = "state_lower"))
+
+# Map 1: Renewable Energy Share in 2023
+ggplot(map_data_renewable, aes(x = long, y = lat, group = group, 
+                                fill = renewable_pct_2023)) +
+  geom_polygon(color = "white", size = 0.2) +
+  coord_fixed(1.3) +
+  scale_fill_viridis_c(option = "plasma", 
+                       name = "Renewable\nEnergy %",
+                       na.value = "grey50") +
+  labs(
+    title = "Share of Renewable Energy by State (2023)",
+    subtitle = "Percentage of total energy consumption from renewable sources",
+    caption = "Data: U.S. Energy Information Administration"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "grey40")
+  )
+
+# Map 2: Change in Renewable Energy Share (2021 to 2023)
+map_data_renewable <- map_data_renewable %>%
+  mutate(renewable_change = renewable_pct_2023 - renewable_pct_2021)
+
+ggplot(map_data_renewable, aes(x = long, y = lat, group = group, 
+                                fill = renewable_change)) +
+  geom_polygon(color = "white", size = 0.2) +
+  coord_fixed(1.3) +
+  scale_fill_gradient2(
+    low = "red", 
+    mid = "white", 
+    high = "darkgreen",
+    midpoint = 0,
+    name = "Change in\nRenewable %",
+    na.value = "grey50"
+  ) +
+  labs(
+    title = "Change in Renewable Energy Share (2021-2023)",
+    subtitle = "Percentage point change in renewable energy usage",
+    caption = "Data: U.S. Energy Information Administration"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "grey40")
+  )
+
+# Map 3: Electricity Prices in 2023
+ggplot(map_data_renewable, aes(x = long, y = lat, group = group, 
+                                fill = price_23)) +
+  geom_polygon(color = "white", size = 0.2) +
+  coord_fixed(1.3) +
+  scale_fill_viridis_c(option = "mako",
+                       name = "Price\n(cents/kWh)",
+                       na.value = "grey50") +
+  labs(
+    title = "Average Electricity Prices by State (2023)",
+    subtitle = "Average retail price in cents per kilowatt-hour",
+    caption = "Data: U.S. Energy Information Administration"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "grey40")
+  )
+
+# Scatter plot: Renewable Energy vs Price
+ggplot(energy_combined, aes(x = renewable_pct_2023, y = price_23)) +
+  geom_point(aes(size = total_2023), alpha = 0.6, color = "steelblue") +
+  geom_smooth(method = "lm", se = TRUE, color = "darkred", linetype = "dashed") +
+  labs(
+    title = "Relationship Between Renewable Energy Share and Electricity Prices",
+    subtitle = "2023 data by state",
+    x = "Renewable Energy Share (%)",
+    y = "Average Electricity Price (cents/kWh)",
+    size = "Total Energy\nConsumption",
+    caption = "Data: U.S. Energy Information Administration"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "grey40")
+  )
+
+# Calculate correlation
+correlation <- cor(energy_combined$renewable_pct_2023, 
+                   energy_combined$price_23, 
+                   use = "complete.obs")
+cat("Correlation between renewable share and price:", round(correlation, 3))
 
 ```
